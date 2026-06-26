@@ -118,6 +118,27 @@
   }
   .link { cursor: pointer; }
   .link:hover { color: var(--ui-text); }
+
+  /* animation */
+  .anim-toggle { color: var(--ui-dim); }
+  .anim-toggle.on { color: var(--ui-accent); }
+  .animrow {
+    display: grid; grid-template-columns: auto 1fr auto 1fr;
+    gap: 5px 8px; align-items: center; margin-top: 9px;
+  }
+  .animrow > span {
+    font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ui-dim);
+  }
+  .animrow input[type="range"] { margin: 0; }
+  .animrow input[type="number"] {
+    width: 100%; background: #0d0d0f; border: 1px solid var(--ui-line);
+    color: var(--ui-text); border-radius: 5px; padding: 5px 7px;
+    font-size: 12px; font-family: inherit; font-variant-numeric: tabular-nums;
+  }
+  .animrow input[type="number"]:focus { outline: none; border-color: var(--ui-accent); }
+  .animrow[hidden] { display: none; }
+  input[type="range"].animating { opacity: .35; pointer-events: none; }
   .actions { display: flex; gap: 8px; margin-top: 22px; }
   .actions button {
     flex: 1; padding: 10px 0; border-radius: 6px; cursor: pointer;
@@ -182,8 +203,12 @@
     </div>
 
     <div class="field">
-      <label>Size <span class="val" id="sizeV"></span></label>
+      <label><span>Size <span class="val" id="sizeV"></span></span><span class="anim-toggle link" data-k="size">animate</span></label>
       <input type="range" id="size" min="40" max="420" step="1" value="220">
+      <div class="animrow" id="size-anim" hidden>
+        <span>min</span><input type="number" id="size-min" min="40" max="420" step="1" value="120">
+        <span>max</span><input type="number" id="size-max" min="40" max="420" step="1" value="320">
+      </div>
     </div>
 
     <div class="field">
@@ -199,18 +224,35 @@
     <hr>
 
     <div class="field">
-      <label>Gaussian blur <span class="val" id="blurV"></span></label>
+      <label><span>Gaussian blur <span class="val" id="blurV"></span></span><span class="anim-toggle link" data-k="blur">animate</span></label>
       <input type="range" id="blur" min="0" max="60" step="0.1" value="9">
+      <div class="animrow" id="blur-anim" hidden>
+        <span>min</span><input type="number" id="blur-min" min="0" max="60" step="0.1" value="2">
+        <span>max</span><input type="number" id="blur-max" min="0" max="60" step="0.1" value="24">
+      </div>
     </div>
 
     <div class="field">
-      <label>Threshold <span class="val" id="threshV"></span></label>
+      <label><span>Threshold <span class="val" id="threshV"></span></span><span class="anim-toggle link" data-k="thresh">animate</span></label>
       <input type="range" id="thresh" min="0.02" max="0.98" step="0.005" value="0.5">
+      <div class="animrow" id="thresh-anim" hidden>
+        <span>min</span><input type="number" id="thresh-min" min="0.02" max="0.98" step="0.005" value="0.35">
+        <span>max</span><input type="number" id="thresh-max" min="0.02" max="0.98" step="0.005" value="0.65">
+      </div>
     </div>
 
     <div class="field">
       <label>Edge hardness <span class="val" id="sharpV"></span></label>
       <input type="range" id="sharp" min="1" max="120" step="1" value="40">
+    </div>
+
+    <div class="field">
+      <label>Animation speed <span class="val" id="speedV"></span></label>
+      <input type="range" id="speed" min="0.03" max="1.5" step="0.01" value="0.25">
+      <div class="seg" id="playmode" style="margin-top:9px;">
+        <button data-p="play" class="on">Play</button>
+        <button data-p="pause">Pause</button>
+      </div>
     </div>
 
     <hr>
@@ -330,6 +372,15 @@ let tmOn = true;
 let kern = [];               // dx (px) before each glyph; index 0 = whole-word shift
 const kernWrap = $('kern');
 
+// oscillating animation for blur / threshold / size
+const anim = {
+  blur:   { on: false, cur: 0, minEl: $('blur-min'),   maxEl: $('blur-max') },
+  thresh: { on: false, cur: 0, minEl: $('thresh-min'), maxEl: $('thresh-max') },
+  size:   { on: false, cur: 0, minEl: $('size-min'),   maxEl: $('size-max') },
+};
+let playing = true;
+function aval(key, fallback) { return anim[key].on ? anim[key].cur : fallback; }
+
 // Build a slider per gap between letters, preserving values by index when text changes.
 function buildKern() {
   const chars = [...(els.text.value || '')];
@@ -361,15 +412,16 @@ function apply() {
   wm.setAttribute('font-family', `"${els.font.value}", sans-serif`);
   wm.setAttribute('font-weight', els.weight.value);
   wm.setAttribute('font-style', els.style.value);
-  wm.setAttribute('font-size', els.size.value);
+  const sizeVal = aval('size', +els.size.value);
+  wm.setAttribute('font-size', sizeVal);
   wm.setAttribute('letter-spacing', els.track.value);
   wm.setAttribute('fill', els.fg.value);
   wm.setAttribute('dx', kern.length ? kern.map(v => v || 0).join(' ') : '0');
 
   // filter: blur -> alpha threshold via color matrix
   const s = +els.sharp.value;                 // contrast steepness on alpha
-  const t = +els.thresh.value;                // 0..1 cut point
-  fe.blur.setAttribute('stdDeviation', els.blur.value);
+  const t = aval('thresh', +els.thresh.value); // 0..1 cut point
+  fe.blur.setAttribute('stdDeviation', aval('blur', +els.blur.value));
   fe.mat.setAttribute('values',
     `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${s} ${(-s * t).toFixed(3)}`);
 
@@ -407,11 +459,12 @@ function apply() {
 
   // readouts
   els.weightV.textContent = els.weight.value;
-  els.sizeV.textContent = els.size.value + 'px';
+  els.sizeV.textContent = Math.round(sizeVal) + 'px';
   els.trackV.textContent = (+els.track.value).toFixed(1);
-  els.blurV.textContent = (+els.blur.value).toFixed(1);
+  els.blurV.textContent = aval('blur', +els.blur.value).toFixed(1);
   els.threshV.textContent = t.toFixed(2);
   els.sharpV.textContent = s;
+  $('speedV').textContent = (+$('speed').value).toFixed(2) + ' Hz';
 }
 
 ['input','change'].forEach(ev =>
@@ -434,6 +487,47 @@ document.querySelectorAll('#tmmode button').forEach(b =>
     document.querySelectorAll('#tmmode button').forEach(x => x.classList.toggle('on', x === b));
     apply();
   }));
+
+// animate toggles — reveal the min/max bounds and dim the manual slider
+document.querySelectorAll('.anim-toggle').forEach(el =>
+  el.addEventListener('click', () => {
+    const k = el.dataset.k;
+    anim[k].on = !anim[k].on;
+    el.classList.toggle('on', anim[k].on);
+    $(k + '-anim').hidden = !anim[k].on;
+    els[k].classList.toggle('animating', anim[k].on);
+    if (anim[k].on) anim[k].cur = +els[k].value;   // start from current value
+    apply();
+  }));
+
+document.querySelectorAll('#playmode button').forEach(b =>
+  b.addEventListener('click', () => {
+    playing = b.dataset.p === 'play';
+    document.querySelectorAll('#playmode button').forEach(x => x.classList.toggle('on', x === b));
+  }));
+
+// eased ping-pong oscillator; clock only advances while playing (no jump on resume)
+let lastNow = null, clock = 0;
+function tick(now) {
+  if (lastNow === null) lastNow = now;
+  const dt = now - lastNow; lastNow = now;
+  if (playing) {
+    clock += dt;
+    const t = clock / 1000, speed = +$('speed').value;
+    let active = false;
+    for (const k of ['blur', 'thresh', 'size']) {
+      const a = anim[k];
+      if (!a.on) continue;
+      active = true;
+      const mn = +a.minEl.value, mx = +a.maxEl.value;
+      const f = 0.5 - 0.5 * Math.cos(2 * Math.PI * speed * t);
+      a.cur = mn + (mx - mn) * f;
+    }
+    if (active) apply();
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
 
 // font preset: fill the family + weight, reveal the text field only for Custom
 $('fontPreset').addEventListener('change', e => {
