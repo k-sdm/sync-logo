@@ -174,7 +174,7 @@
 
     <div class="field">
       <label>Text</label>
-      <input type="text" id="text" value="EXPOSURE" autocomplete="off">
+      <input type="text" id="text" value="SYNC" autocomplete="off">
     </div>
 
     <div class="field">
@@ -225,7 +225,7 @@
 
     <div class="field">
       <label><span>Gaussian blur <span class="val" id="blurV"></span></span><span class="anim-toggle link" data-k="blur">animate</span></label>
-      <input type="range" id="blur" min="0" max="60" step="0.1" value="9">
+      <input type="range" id="blur" min="0" max="60" step="0.1" value="15">
       <div class="animrow" id="blur-anim" hidden>
         <span>min</span><input type="number" id="blur-min" min="0" max="60" step="0.1" value="2">
         <span>max</span><input type="number" id="blur-max" min="0" max="60" step="0.1" value="24">
@@ -234,7 +234,7 @@
 
     <div class="field">
       <label><span>Threshold <span class="val" id="threshV"></span></span><span class="anim-toggle link" data-k="thresh">animate</span></label>
-      <input type="range" id="thresh" min="0.02" max="0.98" step="0.005" value="0.5">
+      <input type="range" id="thresh" min="0.02" max="0.98" step="0.005" value="0.25">
       <div class="animrow" id="thresh-anim" hidden>
         <span>min</span><input type="number" id="thresh-min" min="0.02" max="0.98" step="0.005" value="0.35">
         <span>max</span><input type="number" id="thresh-max" min="0.02" max="0.98" step="0.005" value="0.65">
@@ -369,7 +369,7 @@ const fe = { blur: svg.querySelector('#goo feGaussianBlur'), mat: svg.querySelec
 const feTm = { blur: svg.querySelector('#goo-tm feGaussianBlur'), mat: svg.querySelector('#goo-tm feColorMatrix') };
 let bgMode = 'solid';
 let tmOn = true;
-let kern = [];               // dx (px) before each glyph; index 0 = whole-word shift
+let kern = [0, -28, -12, 0]; // dx (px) before each glyph; seeds default SYNC kerning (SY -28, YN -12)
 const kernWrap = $('kern');
 
 // oscillating animation for blur / threshold / size
