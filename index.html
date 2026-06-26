@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wordmark Playground — blur + threshold</title>
+<style>
+  :root {
+    --ui-bg: #0d0d0f;
+    --ui-panel: #161619;
+    --ui-line: #2a2a30;
+    --ui-text: #e7e7ea;
+    --ui-dim: #8a8a92;
+    --ui-accent: #6c8cff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: ui-sans-serif, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    background: var(--ui-bg);
+    color: var(--ui-text);
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ---- controls ---- */
+  .panel {
+    background: var(--ui-panel);
+    border-right: 1px solid var(--ui-line);
+    padding: 18px 18px 40px;
+    overflow-y: auto;
+  }
+  .panel h1 {
+    font-size: 13px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ui-dim);
+    margin: 2px 0 18px;
+    font-weight: 600;
+  }
+  .field { margin-bottom: 16px; }
+  .field > label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ui-dim);
+    margin-bottom: 7px;
+  }
+  .field .val {
+    color: var(--ui-text);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+  }
+  input[type="text"], select {
+    width: 100%;
+    background: #0d0d0f;
+    border: 1px solid var(--ui-line);
+    color: var(--ui-text);
+    border-radius: 6px;
+    padding: 8px 9px;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  input[type="text"]:focus, select:focus { outline: none; border-color: var(--ui-accent); }
+  input[type="range"] {
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 3px;
+    border-radius: 3px;
+    background: var(--ui-line);
+    margin: 6px 0 0;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    background: var(--ui-text);
+    cursor: pointer;
+    border: 3px solid var(--ui-panel);
+    box-shadow: 0 0 0 1px var(--ui-line);
+  }
+  .row { display: flex; gap: 10px; }
+  .row > .field { flex: 1; }
+  .swatches { display: flex; gap: 8px; }
+  .swatches input[type="color"] {
+    width: 100%; height: 32px; padding: 0;
+    background: none; border: 1px solid var(--ui-line);
+    border-radius: 6px; cursor: pointer;
+  }
+  .seg { display: flex; border: 1px solid var(--ui-line); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    flex: 1; background: transparent; color: var(--ui-dim);
+    border: 0; padding: 7px 0; font-size: 11px; cursor: pointer;
+    letter-spacing: .05em; text-transform: uppercase;
+  }
+  .seg button.on { background: var(--ui-text); color: #000; }
+
+  /* per-letter kerning */
+  .kern { display: flex; flex-direction: column; gap: 4px; }
+  .kgap { display: flex; align-items: center; gap: 9px; }
+  .kgap .kpair {
+    width: 34px; flex: none; text-align: center;
+    font-size: 12px; color: var(--ui-dim); letter-spacing: .04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .kgap .kpair b { color: var(--ui-text); font-weight: 600; }
+  .kgap input[type="range"] { margin: 0; }
+  .kgap .kval {
+    width: 30px; flex: none; text-align: right;
+    font-size: 10.5px; color: var(--ui-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .link { cursor: pointer; }
+  .link:hover { color: var(--ui-text); }
+  .actions { display: flex; gap: 8px; margin-top: 22px; }
+  .actions button {
+    flex: 1; padding: 10px 0; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--ui-line); background: #0d0d0f; color: var(--ui-text);
+    font-size: 12px; letter-spacing: .04em;
+  }
+  .actions button:hover { border-color: var(--ui-accent); }
+  .hint { font-size: 10.5px; color: var(--ui-dim); line-height: 1.5; margin-top: 14px; }
+  hr { border: 0; border-top: 1px solid var(--ui-line); margin: 22px 0; }
+
+  /* ---- stage ---- */
+  .stage {
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  #art { width: 100%; height: 100%; display: block; }
+  #wm, #tm { font-synthesis: none; }
+  .stage.checker {
+    background-image:
+      linear-gradient(45deg, #1a1a1d 25%, transparent 25%),
+      linear-gradient(-45deg, #1a1a1d 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #1a1a1d 75%),
+      linear-gradient(-45deg, transparent 75%, #1a1a1d 75%);
+    background-size: 22px 22px;
+    background-position: 0 0, 0 11px, 11px -11px, -11px 0;
+  }
+</style>
+</head>
+<body>
+  <aside class="panel">
+    <h1>Wordmark — blur · threshold</h1>
+
+    <div class="field">
+      <label>Text</label>
+      <input type="text" id="text" value="EXPOSURE" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label>Font</label>
+      <select id="fontPreset">
+        <option value="Eurostile Bold Extended|400" selected>Eurostile Bold Extended</option>
+        <option value="Helvetica|700">Helvetica Bold</option>
+        <option value="custom">Custom…</option>
+      </select>
+      <input type="text" id="font" value="Eurostile Bold Extended" autocomplete="off"
+        style="margin-top:8px; display:none;">
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label>Weight <span class="val" id="weightV">700</span></label>
+        <select id="weight">
+          <option selected>400</option><option>500</option><option>600</option>
+          <option>700</option><option>800</option><option>900</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Style</label>
+        <select id="style"><option value="normal">Normal</option><option value="italic">Italic</option></select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Size <span class="val" id="sizeV"></span></label>
+      <input type="range" id="size" min="40" max="420" step="1" value="220">
+    </div>
+
+    <div class="field">
+      <label>Letter spacing <span class="val" id="trackV"></span></label>
+      <input type="range" id="track" min="-40" max="120" step="0.5" value="0">
+    </div>
+
+    <div class="field">
+      <label>Per-letter spacing <span class="val link" id="kernReset">reset</span></label>
+      <div class="kern" id="kern"></div>
+    </div>
+
+    <hr>
+
+    <div class="field">
+      <label>Gaussian blur <span class="val" id="blurV"></span></label>
+      <input type="range" id="blur" min="0" max="60" step="0.1" value="9">
+    </div>
+
+    <div class="field">
+      <label>Threshold <span class="val" id="threshV"></span></label>
+      <input type="range" id="thresh" min="0.02" max="0.98" step="0.005" value="0.5">
+    </div>
+
+    <div class="field">
+      <label>Edge hardness <span class="val" id="sharpV"></span></label>
+      <input type="range" id="sharp" min="1" max="120" step="1" value="40">
+    </div>
+
+    <hr>
+
+    <div class="field">
+      <label>Colours</label>
+      <div class="swatches">
+        <input type="color" id="bg" value="#000000" title="Background">
+        <input type="color" id="fg" value="#ffffff" title="Ink">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Background</label>
+      <div class="seg" id="bgmode">
+        <button data-m="solid" class="on">Solid</button>
+        <button data-m="none">Transparent</button>
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="field">
+      <label>Trademark ™</label>
+      <div class="seg" id="tmmode">
+        <button data-m="on" class="on">On</button>
+        <button data-m="off">Off</button>
+      </div>
+    </div>
+
+    <div id="tmctl">
+      <div class="row">
+        <div class="field">
+          <label>TM size <span class="val" id="tmsizeV"></span></label>
+          <input type="range" id="tmsize" min="8" max="160" step="1" value="44">
+        </div>
+        <div class="field">
+          <label>TM distance <span class="val" id="tmgapV"></span></label>
+          <input type="range" id="tmgap" min="-80" max="400" step="1" value="14">
+        </div>
+      </div>
+      <div class="field">
+        <label>TM raise <span class="val" id="tmraiseV"></span></label>
+        <input type="range" id="tmraise" min="-120" max="260" step="1" value="0">
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>TM blur <span class="val" id="tmblurV"></span></label>
+          <input type="range" id="tmblur" min="0" max="24" step="0.1" value="2.4">
+        </div>
+        <div class="field">
+          <label>TM threshold <span class="val" id="tmthreshV"></span></label>
+          <input type="range" id="tmthresh" min="0.02" max="0.98" step="0.005" value="0.5">
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="dlSvg">Export SVG</button>
+      <button id="dlPng">Export PNG</button>
+    </div>
+
+    <p class="hint">
+      Blur softens the letters, then the threshold re-sharpens them — overlapping
+      strokes fuse and corners round off, the way ink blooms.
+      Lower the threshold to fatten, raise it to starve. Edge hardness controls how
+      crisp the cut is (low = soft halo). Font must be installed locally.
+    </p>
+  </aside>
+
+  <main class="stage" id="stage">
+    <svg id="art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="goo" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="9" result="b"/>
+          <feColorMatrix in="b" type="matrix"
+            values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 40 -20"/>
+        </filter>
+        <filter id="goo-tm" x="-80%" y="-80%" width="260%" height="260%" color-interpolation-filters="sRGB">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="2.4" result="bt"/>
+          <feColorMatrix in="bt" type="matrix"
+            values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 40 -20"/>
+        </filter>
+      </defs>
+      <rect id="bgRect" x="0" y="0" width="1600" height="900" fill="#000000"/>
+      <g filter="url(#goo)">
+        <text id="wm" x="800" y="450" text-anchor="middle" dominant-baseline="central"
+          fill="#ffffff" font-size="220" font-weight="700" dx="0"
+          font-family="Eurostile, sans-serif">EXPOSURE</text>
+      </g>
+      <g filter="url(#goo-tm)">
+        <text id="tm" text-anchor="start" dominant-baseline="text-before-edge"
+          fill="#ffffff" font-size="40" font-weight="700"
+          font-family="Eurostile, sans-serif">™</text>
+      </g>
+    </svg>
+  </main>
+
+<script>
+const $ = id => document.getElementById(id);
+const els = {
+  text: $('text'), font: $('font'), weight: $('weight'), weightV: $('weightV'),
+  style: $('style'), size: $('size'), sizeV: $('sizeV'),
+  track: $('track'), trackV: $('trackV'),
+  blur: $('blur'), blurV: $('blurV'), thresh: $('thresh'), threshV: $('threshV'),
+  sharp: $('sharp'), sharpV: $('sharpV'),
+  bg: $('bg'), fg: $('fg'),
+  tmsize: $('tmsize'), tmsizeV: $('tmsizeV'), tmgap: $('tmgap'), tmgapV: $('tmgapV'),
+  tmraise: $('tmraise'), tmraiseV: $('tmraiseV'),
+  tmblur: $('tmblur'), tmblurV: $('tmblurV'), tmthresh: $('tmthresh'), tmthreshV: $('tmthreshV'),
+};
+const svg = $('art'), wm = $('wm'), tm = $('tm'), tmGroup = tm.parentNode, bgRect = $('bgRect'), stage = $('stage');
+const fe = { blur: svg.querySelector('#goo feGaussianBlur'), mat: svg.querySelector('#goo feColorMatrix') };
+const feTm = { blur: svg.querySelector('#goo-tm feGaussianBlur'), mat: svg.querySelector('#goo-tm feColorMatrix') };
+let bgMode = 'solid';
+let tmOn = true;
+let kern = [];               // dx (px) before each glyph; index 0 = whole-word shift
+const kernWrap = $('kern');
+
+// Build a slider per gap between letters, preserving values by index when text changes.
+function buildKern() {
+  const chars = [...(els.text.value || '')];
+  kern = chars.map((_, i) => kern[i] || 0);
+  kernWrap.innerHTML = '';
+  for (let i = 1; i < chars.length; i++) {
+    const prev = chars[i - 1] === ' ' ? '␣' : chars[i - 1];
+    const cur  = chars[i] === ' ' ? '␣' : chars[i];
+    const row = document.createElement('div');
+    row.className = 'kgap';
+    row.innerHTML =
+      `<span class="kpair">${prev}<b>${cur}</b></span>` +
+      `<input type="range" min="-80" max="200" step="1" value="${kern[i]}" data-i="${i}">` +
+      `<span class="kval">${kern[i]}</span>`;
+    const range = row.querySelector('input');
+    const val = row.querySelector('.kval');
+    range.addEventListener('input', () => {
+      kern[i] = +range.value;
+      val.textContent = range.value;
+      apply();
+    });
+    kernWrap.appendChild(row);
+  }
+}
+
+function apply() {
+  // text
+  wm.textContent = els.text.value || ' ';
+  wm.setAttribute('font-family', `"${els.font.value}", sans-serif`);
+  wm.setAttribute('font-weight', els.weight.value);
+  wm.setAttribute('font-style', els.style.value);
+  wm.setAttribute('font-size', els.size.value);
+  wm.setAttribute('letter-spacing', els.track.value);
+  wm.setAttribute('fill', els.fg.value);
+  wm.setAttribute('dx', kern.length ? kern.map(v => v || 0).join(' ') : '0');
+
+  // filter: blur -> alpha threshold via color matrix
+  const s = +els.sharp.value;                 // contrast steepness on alpha
+  const t = +els.thresh.value;                // 0..1 cut point
+  fe.blur.setAttribute('stdDeviation', els.blur.value);
+  fe.mat.setAttribute('values',
+    `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${s} ${(-s * t).toFixed(3)}`);
+
+  // trademark — its own blur/threshold, but shares edge hardness + ink
+  $('tmctl').style.opacity = tmOn ? '' : '.4';
+  $('tmctl').style.pointerEvents = tmOn ? '' : 'none';
+  if (tmOn) {
+    tmGroup.style.display = '';
+    tm.setAttribute('font-family', `"${els.font.value}", sans-serif`);
+    tm.setAttribute('font-weight', els.weight.value);
+    tm.setAttribute('font-style', els.style.value);
+    tm.setAttribute('font-size', els.tmsize.value);
+    tm.setAttribute('fill', els.fg.value);
+    const tt = +els.tmthresh.value;
+    feTm.blur.setAttribute('stdDeviation', els.tmblur.value);
+    feTm.mat.setAttribute('values',
+      `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${s} ${(-s * tt).toFixed(3)}`);
+    // sit it just past the wordmark's right edge, raised toward the cap line
+    const bb = wm.getBBox();
+    tm.setAttribute('x', (bb.x + bb.width + (+els.tmgap.value)).toFixed(1));
+    tm.setAttribute('y', (bb.y + (+els.tmraise.value)).toFixed(1));
+    els.tmsizeV.textContent = els.tmsize.value + 'px';
+    els.tmgapV.textContent = els.tmgap.value;
+    els.tmraiseV.textContent = els.tmraise.value;
+    els.tmblurV.textContent = (+els.tmblur.value).toFixed(1);
+    els.tmthreshV.textContent = tt.toFixed(2);
+  } else {
+    tmGroup.style.display = 'none';
+  }
+
+  // background
+  if (bgMode === 'solid') { bgRect.setAttribute('fill', els.bg.value); bgRect.style.display = ''; }
+  else { bgRect.style.display = 'none'; }
+  stage.classList.toggle('checker', bgMode === 'none');
+
+  // readouts
+  els.weightV.textContent = els.weight.value;
+  els.sizeV.textContent = els.size.value + 'px';
+  els.trackV.textContent = (+els.track.value).toFixed(1);
+  els.blurV.textContent = (+els.blur.value).toFixed(1);
+  els.threshV.textContent = t.toFixed(2);
+  els.sharpV.textContent = s;
+}
+
+['input','change'].forEach(ev =>
+  Object.values(els).forEach(el => el && el.addEventListener && el.addEventListener(ev, apply)));
+
+// rebuild per-letter controls whenever the text changes
+els.text.addEventListener('input', () => { buildKern(); apply(); });
+$('kernReset').addEventListener('click', () => { kern = kern.map(() => 0); buildKern(); apply(); });
+
+document.querySelectorAll('#bgmode button').forEach(b =>
+  b.addEventListener('click', () => {
+    bgMode = b.dataset.m;
+    document.querySelectorAll('#bgmode button').forEach(x => x.classList.toggle('on', x === b));
+    apply();
+  }));
+
+document.querySelectorAll('#tmmode button').forEach(b =>
+  b.addEventListener('click', () => {
+    tmOn = b.dataset.m === 'on';
+    document.querySelectorAll('#tmmode button').forEach(x => x.classList.toggle('on', x === b));
+    apply();
+  }));
+
+// font preset: fill the family + weight, reveal the text field only for Custom
+$('fontPreset').addEventListener('change', e => {
+  const v = e.target.value;
+  if (v === 'custom') {
+    els.font.style.display = '';
+    els.font.focus();
+  } else {
+    const [family, weight] = v.split('|');
+    els.font.value = family;
+    els.font.style.display = 'none';
+    els.weight.value = weight;
+  }
+  apply();
+});
+
+// ---- export ----
+function serialized() {
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  if (bgMode === 'none') clone.querySelector('#bgRect').remove();
+  if (!tmOn) clone.querySelector('#tm').parentNode.remove();
+  return new XMLSerializer().serializeToString(clone);
+}
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('dlSvg').addEventListener('click', () => {
+  const name = (els.text.value || 'wordmark').replace(/\s+/g, '-').toLowerCase();
+  download(new Blob([serialized()], { type: 'image/svg+xml' }), name + '.svg');
+});
+$('dlPng').addEventListener('click', () => {
+  const scale = 2;
+  const w = 1600 * scale, h = 900 * scale;
+  const img = new Image();
+  const blob = new Blob([serialized()], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(url);
+    c.toBlob(b => {
+      const name = (els.text.value || 'wordmark').replace(/\s+/g, '-').toLowerCase();
+      download(b, name + '@2x.png');
+    }, 'image/png');
+  };
+  img.src = url;
+});
+
+buildKern();
+apply();
+// re-place the TM once the local font's real metrics are available
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(apply);
+</script>
+</body>
+</html>
