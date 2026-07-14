@@ -358,12 +358,23 @@
         </div>
       </div>
       <div class="field">
-        <label>Letter to edit</label>
+        <label>Letters to edit</label>
         <div class="seg glyphsel" id="glyphSel"></div>
+      </div>
+      <div class="field">
+        <label>Mirror bezier arms</label>
+        <div class="seg" id="mirrorSel">
+          <button data-m="angle">Angle</button>
+          <button data-m="len">Length</button>
+        </div>
+      </div>
+      <div class="row" style="gap:8px;">
+        <button id="undoBtn" class="mini" disabled>Undo (⌘Z)</button>
       </div>
       <p class="hint">
         Drag <b style="color:#fff">●</b> anchors and <b style="color:var(--ui-accent)">●</b> handles to
-        reshape. Moving an anchor carries its handles. Pick a letter above to edit its nodes.
+        reshape. Moving an anchor carries its handles. <b>Mirror</b>: dragging a handle also moves its
+        sibling across the anchor — Angle keeps the joint smooth, +Length makes it fully symmetric.
         Turn edit <b>off</b> to preview the blur/threshold. Re-vectorize to bake a new size/kerning.
       </p>
     </div>
@@ -451,7 +462,20 @@ let font = null;             // parsed opentype font
 let mode = 'text';           // 'text' | 'vector'
 let editOn = false;
 let model = [];              // per-glyph: { commands: [{type,x,y,x1,y1,x2,y2}] }, coords in viewBox space
-let selGlyph = -1;
+let selGlyph = -1;           // glyph index, or 'all'
+const mirror = { angle: false, len: false };
+const history = [];          // model snapshots, pushed at each drag start / re-vectorize
+function updateUndo() { const b = $('undoBtn'); if (b) b.disabled = !history.length; }
+function pushHistory() {
+  history.push(structuredClone(model));
+  if (history.length > 60) history.shift();
+  updateUndo();
+}
+function undo() {
+  if (!history.length || mode !== 'vector') return;
+  model = history.pop();
+  renderVec(); renderNodes(); updateUndo();
+}
 
 // Build a slider per gap between letters, preserving values by index when text changes.
 function buildKern() {
@@ -656,7 +680,7 @@ $('fontFile').addEventListener('change', e => {
 });
 
 // restore a previously loaded font
-(function restoreFont() {
+function restoreFont() {
   try {
     const b64 = localStorage.getItem(FONT_KEY);
     if (!b64) return;
@@ -665,6 +689,18 @@ $('fontFile').addEventListener('change', e => {
     fontLoaded(opentype.parse(bytes.buffer));
     $('fontStatus').textContent += ' (cached)';
   } catch (_) {}
+}
+
+// bundled default font ships next to the page; picker/cache only used as fallback
+(async function loadBundledFont() {
+  try {
+    const res = await fetch('eurostile-bold-extended.otf');
+    if (!res.ok) throw new Error('no bundled font');
+    fontLoaded(opentype.parse(await res.arrayBuffer()));
+    $('fontStatus').textContent += ' (bundled)';
+  } catch (_) {
+    restoreFont();   // e.g. opened via file:// where fetch is blocked
+  }
 })();
 
 function cmdsToD(cmds) {
@@ -712,8 +748,9 @@ function vectorize() {
     if (c.x1 != null) { c.x1 += tx; c.y1 += ty; }
     if (c.x2 != null) { c.x2 += tx; c.y2 += ty; }
   }));
+  if (model.length) pushHistory();   // undo can step back across a re-vectorize
   model = raw.map(cs => ({ commands: cs }));
-  selGlyph = model.length ? 0 : -1;
+  if (selGlyph !== 'all') selGlyph = model.length ? 0 : -1;
   mode = 'vector';
   $('revertBtn').disabled = false;
   $('vecEdit').style.display = '';
@@ -727,13 +764,15 @@ function buildGlyphButtons() {
   const wrap = $('glyphSel');
   wrap.innerHTML = '';
   const chars = [...(els.text.value || '')];
-  model.forEach((g, i) => {
+  const mk = (label, val) => {
     const b = document.createElement('button');
-    b.textContent = chars[i] === ' ' ? '␣' : (chars[i] || '?');
-    b.className = i === selGlyph ? 'on' : '';
-    b.addEventListener('click', () => { selGlyph = i; buildGlyphButtons(); renderNodes(); });
+    b.textContent = label;
+    b.className = val === selGlyph ? 'on' : '';
+    b.addEventListener('click', () => { selGlyph = val; buildGlyphButtons(); renderNodes(); });
     wrap.appendChild(b);
-  });
+  };
+  model.forEach((g, i) => mk(chars[i] === ' ' ? '␣' : (chars[i] || '?'), i));
+  if (model.length) mk('All', 'all');
 }
 
 function svgCircle(x, y, cls, gi, ci, pt) {
@@ -743,6 +782,7 @@ function svgCircle(x, y, cls, gi, ci, pt) {
   el.setAttribute('class', cls);
   el.addEventListener('pointerdown', e => {
     e.preventDefault(); e.stopPropagation();
+    pushHistory();
     el.setPointerCapture(e.pointerId);
     drag = { gi, ci, pt, el, kind: cls === 'nd-anchor' ? 'anchor' : 'ctrl' };
   });
@@ -763,27 +803,62 @@ function renderNodes() {
   ghost.setAttribute('d', model.map(g => cmdsToD(g.commands)).join(' '));
   ghost.setAttribute('class', 'vec-ghost');
   nodesG.appendChild(ghost);
-  const g = model[selGlyph];
-  if (!g) return;
-  const cmds = g.commands;
-  // handle lines + control points
-  cmds.forEach((c, ci) => {
-    const prev = cmds[ci - 1];
-    if (c.type === 'C') {
-      if (prev && prev.x != null) svgLine(prev.x, prev.y, c.x1, c.y1);
-      svgLine(c.x, c.y, c.x2, c.y2);
-      svgCircle(c.x1, c.y1, 'nd-ctrl', selGlyph, ci, '1');
-      svgCircle(c.x2, c.y2, 'nd-ctrl', selGlyph, ci, '2');
-    } else if (c.type === 'Q') {
-      if (prev && prev.x != null) svgLine(prev.x, prev.y, c.x1, c.y1);
-      svgLine(c.x, c.y, c.x1, c.y1);
-      svgCircle(c.x1, c.y1, 'nd-ctrl', selGlyph, ci, '1');
+  const idxs = selGlyph === 'all' ? model.map((_, i) => i) : [selGlyph];
+  for (const gi of idxs) {
+    const g = model[gi];
+    if (!g) continue;
+    const cmds = g.commands;
+    // handle lines + control points
+    cmds.forEach((c, ci) => {
+      const prev = cmds[ci - 1];
+      if (c.type === 'C') {
+        if (prev && prev.x != null) svgLine(prev.x, prev.y, c.x1, c.y1);
+        svgLine(c.x, c.y, c.x2, c.y2);
+        svgCircle(c.x1, c.y1, 'nd-ctrl', gi, ci, '1');
+        svgCircle(c.x2, c.y2, 'nd-ctrl', gi, ci, '2');
+      } else if (c.type === 'Q') {
+        if (prev && prev.x != null) svgLine(prev.x, prev.y, c.x1, c.y1);
+        svgLine(c.x, c.y, c.x1, c.y1);
+        svgCircle(c.x1, c.y1, 'nd-ctrl', gi, ci, '1');
+      }
+    });
+    // anchors on top
+    cmds.forEach((c, ci) => {
+      if (c.type !== 'Z' && c.x != null) svgCircle(c.x, c.y, 'nd-anchor', gi, ci, '');
+    });
+  }
+}
+
+// walk to the enclosing contour's M (start) and Z (end) indexes
+function contourBounds(cmds, ci) {
+  let s = ci; while (s > 0 && cmds[s].type !== 'M') s--;
+  let e = ci; while (e < cmds.length && cmds[e].type !== 'Z') e++;
+  return [s, e];
+}
+// the sibling handle across the shared anchor, wrapping contour start/end
+function findOpposite(cmds, ci, pt) {
+  const c = cmds[ci];
+  const [s, e] = contourBounds(cmds, ci);
+  const near = (a, b) => Math.abs(a - b) < 0.01;
+  if (pt === '2') {                              // incoming handle of anchor (c.x, c.y)
+    const anchor = { x: c.x, y: c.y };
+    const nx = cmds[ci + 1];
+    if (nx && (nx.type === 'C' || nx.type === 'Q')) return { c: nx, pt: '1', anchor };
+    if ((!nx || nx.type === 'Z') && cmds[s + 1] && (cmds[s + 1].type === 'C' || cmds[s + 1].type === 'Q')
+        && near(cmds[s].x, anchor.x) && near(cmds[s].y, anchor.y))
+      return { c: cmds[s + 1], pt: '1', anchor };
+  } else {                                       // outgoing handle of previous anchor
+    const pv = cmds[ci - 1];
+    if (!pv || pv.x == null) return null;
+    const anchor = { x: pv.x, y: pv.y };
+    if (pv.type === 'C') return { c: pv, pt: '2', anchor };
+    if (pv.type === 'M') {
+      const last = cmds[e - 1];
+      if (last && last.type === 'C' && near(last.x, anchor.x) && near(last.y, anchor.y))
+        return { c: last, pt: '2', anchor };
     }
-  });
-  // anchors on top
-  cmds.forEach((c, ci) => {
-    if (c.type !== 'Z' && c.x != null) svgCircle(c.x, c.y, 'nd-anchor', selGlyph, ci, '');
-  });
+  }
+  return null;
 }
 
 // dragging via the SVG's screen CTM inverse (handles the viewBox mapping)
@@ -800,14 +875,41 @@ svg.addEventListener('pointermove', evt => {
   const cmds = model[drag.gi].commands;
   const c = cmds[drag.ci];
   if (drag.kind === 'anchor') {
-    const dx = px - c.x, dy = py - c.y;
-    c.x = px; c.y = py;
-    if (c.type === 'C') { c.x2 += dx; c.y2 += dy; }   // incoming handle follows
-    const nx = cmds[drag.ci + 1];
-    if (nx && (nx.type === 'C' || nx.type === 'Q')) { nx.x1 += dx; nx.y1 += dy; } // outgoing handle follows
+    const ox = c.x, oy = c.y;
+    const dx = px - ox, dy = py - oy;
+    const carry = (j) => {
+      const cj = cmds[j];
+      cj.x += dx; cj.y += dy;
+      if (cj.type === 'C') { cj.x2 += dx; cj.y2 += dy; }          // incoming handle follows
+      const nj = cmds[j + 1];
+      if (nj && (nj.type === 'C' || nj.type === 'Q')) { nj.x1 += dx; nj.y1 += dy; } // outgoing follows
+    };
+    carry(drag.ci);
+    // a closed contour's M and its closing endpoint coincide — move both or the path tears
+    const [cs, ce] = contourBounds(cmds, drag.ci);
+    for (let j = cs; j < ce; j++) {
+      const cj = cmds[j];
+      if (j !== drag.ci && cj.x != null && Math.abs(cj.x - ox) < 0.01 && Math.abs(cj.y - oy) < 0.01)
+        carry(j);
+    }
     drag.el.setAttribute('cx', c.x); drag.el.setAttribute('cy', c.y);
   } else {
     c['x' + drag.pt] = px; c['y' + drag.pt] = py;
+    // mirror the sibling arm across the shared anchor
+    if (mirror.angle || mirror.len) {
+      const op = findOpposite(cmds, drag.ci, drag.pt);
+      if (op) {
+        const A = op.anchor;
+        const hd = Math.hypot(px - A.x, py - A.y) || 1;
+        const oxv = op.c['x' + op.pt] - A.x, oyv = op.c['y' + op.pt] - A.y;
+        const od = Math.hypot(oxv, oyv) || 1;
+        const ux = mirror.angle ? (A.x - px) / hd : oxv / od;
+        const uy = mirror.angle ? (A.y - py) / hd : oyv / od;
+        const L = mirror.len ? hd : od;
+        op.c['x' + op.pt] = A.x + ux * L;
+        op.c['y' + op.pt] = A.y + uy * L;
+      }
+    }
     drag.el.setAttribute('cx', px); drag.el.setAttribute('cy', py);
   }
   renderVec();
@@ -821,11 +923,26 @@ svg.addEventListener('pointerup', () => {
 $('vectorizeBtn').addEventListener('click', vectorize);
 $('revertBtn').addEventListener('click', () => {
   mode = 'text'; editOn = false; model = []; selGlyph = -1;
+  history.length = 0; updateUndo();
   $('vecEdit').style.display = 'none';
   document.querySelectorAll('#editmode button').forEach(x => x.classList.toggle('on', x.dataset.e === 'off'));
   nodesG.innerHTML = '';
   apply();
 });
+$('undoBtn').addEventListener('click', undo);
+window.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z'
+      && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)
+      && mode === 'vector') {
+    e.preventDefault();
+    undo();
+  }
+});
+document.querySelectorAll('#mirrorSel button').forEach(b =>
+  b.addEventListener('click', () => {
+    mirror[b.dataset.m] = !mirror[b.dataset.m];
+    b.classList.toggle('on', mirror[b.dataset.m]);
+  }));
 document.querySelectorAll('#editmode button').forEach(b =>
   b.addEventListener('click', () => {
     editOn = b.dataset.e === 'on';

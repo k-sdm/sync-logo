@@ -2,4 +2,5 @@
 *.ttf
 *.woff
 *.woff2
+!eurostile-bold-extended.otf
 .DS_Store
