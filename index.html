@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wordmark Playground — blur + threshold</title>
 <style>
+  /* Bundle the wordmark font so live text renders it without a system install
+     (matches the vectorized outlines exactly). Registered under both the full
+     name and the family name so the Font presets resolve to it. */
+  @font-face {
+    font-family: "Eurostile Bold Extended";
+    src: url("eurostile-bold-extended.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: block;
+  }
+  @font-face {
+    font-family: "Eurostile BQ";
+    src: url("eurostile-bold-extended.otf") format("opentype");
+    font-weight: 400; font-style: normal; font-display: block;
+  }
   :root {
     --ui-bg: #0d0d0f;
     --ui-panel: #161619;
@@ -691,12 +704,23 @@ function restoreFont() {
   } catch (_) {}
 }
 
+// data URI of the bundled font so exported SVG/PNG are self-contained
+let fontDataUri = null;
+function abToB64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 // bundled default font ships next to the page; picker/cache only used as fallback
 (async function loadBundledFont() {
   try {
     const res = await fetch('eurostile-bold-extended.otf');
     if (!res.ok) throw new Error('no bundled font');
-    fontLoaded(opentype.parse(await res.arrayBuffer()));
+    const buf = await res.arrayBuffer();
+    fontLoaded(opentype.parse(buf));
+    fontDataUri = 'data:font/otf;base64,' + abToB64(buf);
     $('fontStatus').textContent += ' (bundled)';
   } catch (_) {
     restoreFont();   // e.g. opened via file:// where fetch is blocked
@@ -955,6 +979,14 @@ document.querySelectorAll('#editmode button').forEach(b =>
 function serialized() {
   const clone = svg.cloneNode(true);
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  // embed the font so live text + ™ render in exports without a system install
+  if (fontDataUri) {
+    const st = document.createElementNS(SVGNS, 'style');
+    st.textContent =
+      `@font-face{font-family:"Eurostile Bold Extended";src:url(${fontDataUri}) format("opentype");font-weight:400}` +
+      `@font-face{font-family:"Eurostile BQ";src:url(${fontDataUri}) format("opentype");font-weight:400}`;
+    clone.querySelector('defs').appendChild(st);
+  }
   if (bgMode === 'none') clone.querySelector('#bgRect').remove();
   if (!tmOn) clone.querySelector('#tm').parentNode.remove();
   clone.querySelector('#nodes').remove();                 // never export the editing overlay
