@@ -138,6 +138,32 @@
   }
   .animrow input[type="number"]:focus { outline: none; border-color: var(--ui-accent); }
   .animrow[hidden] { display: none; }
+
+  /* vector / node editing */
+  input[type="file"] {
+    width: 100%; font-size: 11px; color: var(--ui-dim);
+    background: #0d0d0f; border: 1px solid var(--ui-line);
+    border-radius: 6px; padding: 7px; cursor: pointer;
+  }
+  input[type="file"]::file-selector-button {
+    background: var(--ui-line); color: var(--ui-text); border: 0;
+    border-radius: 4px; padding: 4px 9px; margin-right: 9px; cursor: pointer;
+    font-size: 11px;
+  }
+  button.mini {
+    flex: 1; padding: 8px 0; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--ui-line); background: #0d0d0f; color: var(--ui-text);
+    font-size: 11.5px; letter-spacing: .03em;
+  }
+  button.mini:hover:not(:disabled) { border-color: var(--ui-accent); }
+  button.mini:disabled { opacity: .4; cursor: default; }
+  .glyphsel { flex-wrap: wrap; }
+  .glyphsel button { min-width: 30px; flex: none; padding: 7px 10px; font-size: 13px; }
+  /* SVG overlay elements */
+  .vec-ghost { fill: none; stroke: var(--ui-accent); stroke-width: 1.2; opacity: .5; vector-effect: non-scaling-stroke; }
+  .nd-handle { stroke: var(--ui-accent); stroke-width: 1; opacity: .55; vector-effect: non-scaling-stroke; }
+  .nd-anchor { fill: #0d0d0f; stroke: #fff; stroke-width: 2.2; cursor: grab; vector-effect: non-scaling-stroke; }
+  .nd-ctrl { fill: var(--ui-accent); stroke: #fff; stroke-width: 1.4; cursor: grab; vector-effect: non-scaling-stroke; }
   input[type="range"].animating { opacity: .35; pointer-events: none; }
   .actions { display: flex; gap: 8px; margin-top: 22px; }
   .actions button {
@@ -310,6 +336,38 @@
       </div>
     </div>
 
+    <hr>
+
+    <div class="field">
+      <label>Letter paths — vector edit</label>
+      <input type="file" id="fontFile" accept=".otf,.ttf,.woff">
+      <div class="hint" id="fontStatus" style="margin-top:6px;">No font loaded. Pick your .otf to outline the letters into editable paths.</div>
+    </div>
+
+    <div class="row" style="gap:8px;">
+      <button id="vectorizeBtn" class="mini" disabled>Vectorize text</button>
+      <button id="revertBtn" class="mini" disabled>Back to text</button>
+    </div>
+
+    <div id="vecEdit" style="display:none;">
+      <div class="field" style="margin-top:16px;">
+        <label>Edit nodes</label>
+        <div class="seg" id="editmode">
+          <button data-e="on">On</button>
+          <button data-e="off" class="on">Off</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Letter to edit</label>
+        <div class="seg glyphsel" id="glyphSel"></div>
+      </div>
+      <p class="hint">
+        Drag <b style="color:#fff">●</b> anchors and <b style="color:var(--ui-accent)">●</b> handles to
+        reshape. Moving an anchor carries its handles. Pick a letter above to edit its nodes.
+        Turn edit <b>off</b> to preview the blur/threshold. Re-vectorize to bake a new size/kerning.
+      </p>
+    </div>
+
     <div class="actions">
       <button id="dlSvg">Export SVG</button>
       <button id="dlPng">Export PNG</button>
@@ -338,11 +396,15 @@
         </filter>
       </defs>
       <rect id="bgRect" x="0" y="0" width="1600" height="900" fill="#000000"/>
-      <g filter="url(#goo)">
+      <g id="wmGroup" filter="url(#goo)">
         <text id="wm" x="800" y="450" text-anchor="middle" dominant-baseline="central"
           fill="#ffffff" font-size="220" font-weight="700" dx="0"
           font-family="Eurostile, sans-serif">EXPOSURE</text>
       </g>
+      <g id="vecGroup" filter="url(#goo)" style="display:none;">
+        <path id="vecPath" fill="#ffffff" d=""/>
+      </g>
+      <g id="nodes"></g>
       <g filter="url(#goo-tm)">
         <text id="tm" text-anchor="start" dominant-baseline="text-before-edge"
           fill="#ffffff" font-size="40" font-weight="700"
@@ -351,8 +413,10 @@
     </svg>
   </main>
 
+<script src="opentype.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
+const SVGNS = 'http://www.w3.org/2000/svg';
 const els = {
   text: $('text'), font: $('font'), weight: $('weight'), weightV: $('weightV'),
   style: $('style'), size: $('size'), sizeV: $('sizeV'),
@@ -364,7 +428,8 @@ const els = {
   tmraise: $('tmraise'), tmraiseV: $('tmraiseV'),
   tmblur: $('tmblur'), tmblurV: $('tmblurV'), tmthresh: $('tmthresh'), tmthreshV: $('tmthreshV'),
 };
-const svg = $('art'), wm = $('wm'), tm = $('tm'), tmGroup = tm.parentNode, bgRect = $('bgRect'), stage = $('stage');
+const svg = $('art'), wm = $('wm'), wmGroup = $('wmGroup'), tm = $('tm'), tmGroup = tm.parentNode, bgRect = $('bgRect'), stage = $('stage');
+const vecGroup = $('vecGroup'), vecPath = $('vecPath'), nodesG = $('nodes');
 const fe = { blur: svg.querySelector('#goo feGaussianBlur'), mat: svg.querySelector('#goo feColorMatrix') };
 const feTm = { blur: svg.querySelector('#goo-tm feGaussianBlur'), mat: svg.querySelector('#goo-tm feColorMatrix') };
 let bgMode = 'solid';
@@ -380,6 +445,13 @@ const anim = {
 };
 let playing = true;
 function aval(key, fallback) { return anim[key].on ? anim[key].cur : fallback; }
+
+// vector / node editing state
+let font = null;             // parsed opentype font
+let mode = 'text';           // 'text' | 'vector'
+let editOn = false;
+let model = [];              // per-glyph: { commands: [{type,x,y,x1,y1,x2,y2}] }, coords in viewBox space
+let selGlyph = -1;
 
 // Build a slider per gap between letters, preserving values by index when text changes.
 function buildKern() {
@@ -450,6 +522,17 @@ function apply() {
     els.tmthreshV.textContent = tt.toFixed(2);
   } else {
     tmGroup.style.display = 'none';
+  }
+
+  // text vs vector mode
+  if (mode === 'vector') {
+    wmGroup.style.display = 'none';
+    vecGroup.style.display = '';
+    vecPath.setAttribute('fill', els.fg.value);
+    vecGroup.setAttribute('filter', editOn ? 'none' : 'url(#goo)');
+  } else {
+    wmGroup.style.display = '';
+    vecGroup.style.display = 'none';
   }
 
   // background
@@ -544,12 +627,228 @@ $('fontPreset').addEventListener('change', e => {
   apply();
 });
 
+// ================= vector / node editing =================
+const FONT_KEY = 'sync-logo-font-b64';
+
+function fontLoaded(f) {
+  font = f;
+  const nm = (f.names && f.names.fullName && f.names.fullName.en) || 'font';
+  $('fontStatus').textContent = 'Loaded: ' + nm;
+  $('vectorizeBtn').disabled = false;
+}
+
+$('fontFile').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      fontLoaded(opentype.parse(r.result));
+      const bytes = new Uint8Array(r.result);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      try { localStorage.setItem(FONT_KEY, btoa(bin)); } catch (_) {}
+    } catch (err) {
+      $('fontStatus').textContent = 'Could not parse that font file.';
+    }
+  };
+  r.readAsArrayBuffer(file);
+});
+
+// restore a previously loaded font
+(function restoreFont() {
+  try {
+    const b64 = localStorage.getItem(FONT_KEY);
+    if (!b64) return;
+    const bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    fontLoaded(opentype.parse(bytes.buffer));
+    $('fontStatus').textContent += ' (cached)';
+  } catch (_) {}
+})();
+
+function cmdsToD(cmds) {
+  let d = '';
+  for (const c of cmds) {
+    if (c.type === 'M') d += `M${c.x} ${c.y}`;
+    else if (c.type === 'L') d += `L${c.x} ${c.y}`;
+    else if (c.type === 'C') d += `C${c.x1} ${c.y1} ${c.x2} ${c.y2} ${c.x} ${c.y}`;
+    else if (c.type === 'Q') d += `Q${c.x1} ${c.y1} ${c.x} ${c.y}`;
+    else if (c.type === 'Z') d += 'Z';
+    d += ' ';
+  }
+  return d;
+}
+function renderVec() {
+  vecPath.setAttribute('d', model.map(g => cmdsToD(g.commands)).join(' '));
+}
+
+// build editable per-glyph paths from the current text/size/kerning using the loaded font
+function vectorize() {
+  if (!font) return;
+  const text = els.text.value || '';
+  const size = +els.size.value;
+  const ls = +els.track.value;
+  const scale = size / font.unitsPerEm;
+  const glyphs = font.stringToGlyphs(text);
+  let x = 0;
+  const raw = [];
+  glyphs.forEach((g, i) => {
+    x += (kern[i] || 0);
+    const p = g.getPath(x, 0, size);           // baseline at y = 0
+    raw.push(p.commands.map(c => ({ ...c })));
+    x += g.advanceWidth * scale + ls;
+  });
+  // centre the whole word in the 1600x900 viewBox
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  const each = (c, f) => { if (c.x != null) f(c.x, c.y); if (c.x1 != null) f(c.x1, c.y1); if (c.x2 != null) f(c.x2, c.y2); };
+  raw.forEach(cs => cs.forEach(c => each(c, (px, py) => {
+    minX = Math.min(minX, px); minY = Math.min(minY, py);
+    maxX = Math.max(maxX, px); maxY = Math.max(maxY, py);
+  })));
+  const tx = 800 - (minX + maxX) / 2, ty = 450 - (minY + maxY) / 2;
+  raw.forEach(cs => cs.forEach(c => {
+    if (c.x != null) { c.x += tx; c.y += ty; }
+    if (c.x1 != null) { c.x1 += tx; c.y1 += ty; }
+    if (c.x2 != null) { c.x2 += tx; c.y2 += ty; }
+  }));
+  model = raw.map(cs => ({ commands: cs }));
+  selGlyph = model.length ? 0 : -1;
+  mode = 'vector';
+  $('revertBtn').disabled = false;
+  $('vecEdit').style.display = '';
+  buildGlyphButtons();
+  renderVec();
+  renderNodes();
+  apply();
+}
+
+function buildGlyphButtons() {
+  const wrap = $('glyphSel');
+  wrap.innerHTML = '';
+  const chars = [...(els.text.value || '')];
+  model.forEach((g, i) => {
+    const b = document.createElement('button');
+    b.textContent = chars[i] === ' ' ? '␣' : (chars[i] || '?');
+    b.className = i === selGlyph ? 'on' : '';
+    b.addEventListener('click', () => { selGlyph = i; buildGlyphButtons(); renderNodes(); });
+    wrap.appendChild(b);
+  });
+}
+
+function svgCircle(x, y, cls, gi, ci, pt) {
+  const el = document.createElementNS(SVGNS, 'circle');
+  el.setAttribute('cx', x); el.setAttribute('cy', y);
+  el.setAttribute('r', cls === 'nd-anchor' ? 7 : 5.5);
+  el.setAttribute('class', cls);
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation();
+    el.setPointerCapture(e.pointerId);
+    drag = { gi, ci, pt, el, kind: cls === 'nd-anchor' ? 'anchor' : 'ctrl' };
+  });
+  nodesG.appendChild(el);
+}
+function svgLine(x1, y1, x2, y2) {
+  const el = document.createElementNS(SVGNS, 'line');
+  el.setAttribute('x1', x1); el.setAttribute('y1', y1);
+  el.setAttribute('x2', x2); el.setAttribute('y2', y2);
+  el.setAttribute('class', 'nd-handle');
+  nodesG.appendChild(el);
+}
+function renderNodes() {
+  nodesG.innerHTML = '';
+  if (mode !== 'vector' || !editOn) return;
+  // faint outline of the whole word for reference
+  const ghost = document.createElementNS(SVGNS, 'path');
+  ghost.setAttribute('d', model.map(g => cmdsToD(g.commands)).join(' '));
+  ghost.setAttribute('class', 'vec-ghost');
+  nodesG.appendChild(ghost);
+  const g = model[selGlyph];
+  if (!g) return;
+  const cmds = g.commands;
+  // handle lines + control points
+  cmds.forEach((c, ci) => {
+    const prev = cmds[ci - 1];
+    if (c.type === 'C') {
+      if (prev && prev.x != null) svgLine(prev.x, prev.y, c.x1, c.y1);
+      svgLine(c.x, c.y, c.x2, c.y2);
+      svgCircle(c.x1, c.y1, 'nd-ctrl', selGlyph, ci, '1');
+      svgCircle(c.x2, c.y2, 'nd-ctrl', selGlyph, ci, '2');
+    } else if (c.type === 'Q') {
+      if (prev && prev.x != null) svgLine(prev.x, prev.y, c.x1, c.y1);
+      svgLine(c.x, c.y, c.x1, c.y1);
+      svgCircle(c.x1, c.y1, 'nd-ctrl', selGlyph, ci, '1');
+    }
+  });
+  // anchors on top
+  cmds.forEach((c, ci) => {
+    if (c.type !== 'Z' && c.x != null) svgCircle(c.x, c.y, 'nd-anchor', selGlyph, ci, '');
+  });
+}
+
+// dragging via the SVG's screen CTM inverse (handles the viewBox mapping)
+let drag = null;
+function toLocal(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+svg.addEventListener('pointermove', evt => {
+  if (!drag) return;
+  const p = toLocal(evt);
+  const px = Math.round(p.x), py = Math.round(p.y);
+  const cmds = model[drag.gi].commands;
+  const c = cmds[drag.ci];
+  if (drag.kind === 'anchor') {
+    const dx = px - c.x, dy = py - c.y;
+    c.x = px; c.y = py;
+    if (c.type === 'C') { c.x2 += dx; c.y2 += dy; }   // incoming handle follows
+    const nx = cmds[drag.ci + 1];
+    if (nx && (nx.type === 'C' || nx.type === 'Q')) { nx.x1 += dx; nx.y1 += dy; } // outgoing handle follows
+    drag.el.setAttribute('cx', c.x); drag.el.setAttribute('cy', c.y);
+  } else {
+    c['x' + drag.pt] = px; c['y' + drag.pt] = py;
+    drag.el.setAttribute('cx', px); drag.el.setAttribute('cy', py);
+  }
+  renderVec();
+});
+svg.addEventListener('pointerup', () => {
+  if (!drag) return;
+  drag = null;
+  renderNodes();   // rebuild handle lines / anchor-carried handles
+});
+
+$('vectorizeBtn').addEventListener('click', vectorize);
+$('revertBtn').addEventListener('click', () => {
+  mode = 'text'; editOn = false; model = []; selGlyph = -1;
+  $('vecEdit').style.display = 'none';
+  document.querySelectorAll('#editmode button').forEach(x => x.classList.toggle('on', x.dataset.e === 'off'));
+  nodesG.innerHTML = '';
+  apply();
+});
+document.querySelectorAll('#editmode button').forEach(b =>
+  b.addEventListener('click', () => {
+    editOn = b.dataset.e === 'on';
+    document.querySelectorAll('#editmode button').forEach(x => x.classList.toggle('on', x === b));
+    renderNodes();
+    apply();
+  }));
+
 // ---- export ----
 function serialized() {
   const clone = svg.cloneNode(true);
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   if (bgMode === 'none') clone.querySelector('#bgRect').remove();
   if (!tmOn) clone.querySelector('#tm').parentNode.remove();
+  clone.querySelector('#nodes').remove();                 // never export the editing overlay
+  if (mode === 'vector') {
+    clone.querySelector('#wmGroup').remove();
+    const vg = clone.querySelector('#vecGroup');
+    vg.style.display = '';
+    vg.setAttribute('filter', 'url(#goo)');               // always the effect, even mid-edit
+  } else {
+    clone.querySelector('#vecGroup').remove();
+  }
   return new XMLSerializer().serializeToString(clone);
 }
 function download(blob, name) {

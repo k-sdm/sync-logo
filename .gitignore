@@ -1,0 +1,5 @@
+*.otf
+*.ttf
+*.woff
+*.woff2
+.DS_Store
