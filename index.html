@@ -388,7 +388,8 @@
         Drag <b style="color:#fff">●</b> anchors and <b style="color:var(--ui-accent)">●</b> handles to
         reshape. Moving an anchor carries its handles. <b>Mirror</b>: dragging a handle also moves its
         sibling across the anchor — Angle keeps the joint smooth, +Length makes it fully symmetric.
-        Turn edit <b>off</b> to preview the blur/threshold. Re-vectorize to bake a new size/kerning.
+        Letter spacing &amp; per-letter spacing stay live here (they slide whole letters, keeping your
+        node edits). Turn edit <b>off</b> to preview the blur/threshold. Re-vectorize to bake a new size.
       </p>
     </div>
 
@@ -476,6 +477,8 @@ let mode = 'text';           // 'text' | 'vector'
 let editOn = false;
 let model = [];              // per-glyph: { commands: [{type,x,y,x1,y1,x2,y2}] }, coords in viewBox space
 let selGlyph = -1;           // glyph index, or 'all'
+// live letter-spacing / kerning in vector mode (rigid per-glyph shifts; node edits preserved)
+let vecLS = 0, vecKern = [], spacingShift = [], lastSpaceKey = '';
 const mirror = { angle: false, len: false };
 const history = [];          // model snapshots, pushed at each drag start / re-vectorize
 function updateUndo() { const b = $('undoBtn'); if (b) b.disabled = !history.length; }
@@ -563,6 +566,7 @@ function apply() {
 
   // text vs vector mode
   if (mode === 'vector') {
+    syncVectorSpacing();
     wmGroup.style.display = 'none';
     vecGroup.style.display = '';
     vecPath.setAttribute('fill', els.fg.value);
@@ -743,6 +747,42 @@ function renderVec() {
   vecPath.setAttribute('d', model.map(g => cmdsToD(g.commands)).join(' '));
 }
 
+function translateGlyph(i, dx) {
+  for (const c of model[i].commands) {
+    if (c.x != null) c.x += dx;
+    if (c.x1 != null) c.x1 += dx;
+    if (c.x2 != null) c.x2 += dx;
+  }
+}
+// extra x for glyph i from letter-spacing `ls` and kern array (cumulative before glyph i)
+function spacingPart(i, ls, arr) {
+  let s = ls * i;
+  for (let j = 0; j <= i; j++) s += (arr[j] || 0);
+  return s;
+}
+// slide whole glyphs to reflect current spacing/kerning without touching node edits
+function syncVectorSpacing() {
+  if (mode !== 'vector' || !model.length) return;
+  const ls = +els.track.value;
+  const key = ls + '|' + kern.join(',');
+  if (key === lastSpaceKey) return;          // only when spacing actually changed
+  lastSpaceKey = key;
+  for (let i = 0; i < model.length; i++) {
+    const want = spacingPart(i, ls, kern) - spacingPart(i, vecLS, vecKern);
+    const d = want - (spacingShift[i] || 0);
+    if (Math.abs(d) > 0.001) { translateGlyph(i, d); spacingShift[i] = want; }
+  }
+  // keep the word centred horizontally
+  let minX = 1e9, maxX = -1e9;
+  model.forEach(g => g.commands.forEach(c => {
+    if (c.x != null) { minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x); }
+  }));
+  const need = 800 - (minX + maxX) / 2;
+  if (Math.abs(need) > 0.001) model.forEach((_, i) => translateGlyph(i, need));
+  renderVec();
+  if (editOn) renderNodes();
+}
+
 // build editable per-glyph paths from the current text/size/kerning using the loaded font
 function vectorize() {
   if (!font) return;
@@ -774,6 +814,9 @@ function vectorize() {
   }));
   if (model.length) pushHistory();   // undo can step back across a re-vectorize
   model = raw.map(cs => ({ commands: cs }));
+  vecLS = ls; vecKern = kern.slice();
+  spacingShift = model.map(() => 0);
+  lastSpaceKey = '';
   if (selGlyph !== 'all') selGlyph = model.length ? 0 : -1;
   mode = 'vector';
   $('revertBtn').disabled = false;
